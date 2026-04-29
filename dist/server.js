@@ -26,7 +26,11 @@ app.use('/api/excel', excel_1.default);
 app.get('/api/health', (_req, res) => res.json({ status: 'OK', version: '4.2.0', app: 'KHIPU Arqueo Pro' }));
 if (process.env.NODE_ENV === 'production') {
     app.use(express_1.default.static(path_1.default.join(__dirname, '../frontend/dist')));
-    app.get('*', (_req, res) => res.sendFile(path_1.default.join(__dirname, '../frontend/dist/index.html')));
+    app.get('*', (req, res) => {
+        if (req.path.startsWith('/api'))
+            return res.status(404).json({ error: 'Not found' });
+        res.sendFile(path_1.default.join(__dirname, '../frontend/dist/index.html'));
+    });
 }
 app.listen(PORT, () => {
     console.log('\n╔══════════════════════════════════════════════╗');
