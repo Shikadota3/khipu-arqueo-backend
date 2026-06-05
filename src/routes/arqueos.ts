@@ -67,12 +67,12 @@ router.post('/', async (req: Request, res: Response) => {
       await client.query(
         `INSERT INTO operaciones
            (arqueo_id, usuario_id, concepto, monto, tipo_movimiento,
-            metodo_pago, tipo_documento, numero_documento, tiene_documento, origen_carga)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            metodo_pago, tipo_documento, numero_documento, tiene_documento, imagen_documento, origen_carga)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [
           arqueoId, usuarioId, op.concepto, op.monto, op.tipo,
           op.metodo, op.tipoDoc, op.numeroDoc || null,
-          op.tieneDoc || false, op.origen || 'MANUAL',
+          op.tieneDoc || false, op.imagenBase64 || null, op.origen || 'MANUAL',
         ]
       );
     }

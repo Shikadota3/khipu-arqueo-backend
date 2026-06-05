@@ -4,7 +4,8 @@ import pool from '../db';
 import { authMiddleware, requireRol } from '../middleware/auth';
 
 const router = Router();
-// GET /api/users/public/:empresaId — sin auth, solo nombre y rol para el login
+
+// GET /api/users/public/:empresaId — sin auth
 router.get('/public/:empresaId', async (req: Request, res: Response) => {
   try {
     const r = await pool.query(
@@ -17,7 +18,46 @@ router.get('/public/:empresaId', async (req: Request, res: Response) => {
   } catch (err: any) { return res.status(500).json({ error: err.message }); }
 });
 
-router.use(authMiddleware); // ← esta línea ya existe, el endpoint nuevo va ANTES
+// ── POST /api/users/bulk — VA AQUÍ, antes del authMiddleware global ──
+router.post('/bulk', authMiddleware, requireRol('AUDITOR'), async (req: Request, res: Response) => {
+  const { empresaId } = (req as any).user;
+  const { usuarios } = req.body;
+  if (!Array.isArray(usuarios) || !usuarios.length)
+    return res.status(400).json({ error: 'No se recibieron usuarios' });
+  const creados: string[] = [];
+  const errores: string[] = [];
+  const cajRes = await pool.query(
+    `SELECT COUNT(*) FROM usuarios WHERE empresa_id=$1 AND rol='CAJERO' AND activo=TRUE`,
+    [empresaId]
+  );
+  let cajeroCount = parseInt(cajRes.rows[0].count) || 0;
+  for (const u of usuarios) {
+    const { usuario, pin } = u;
+    if (!usuario || !pin || String(pin).length < 4) {
+      errores.push(`${usuario || 'sin nombre'}: datos inválidos`);
+      continue;
+    }
+    try {
+      const dup = await pool.query(
+        'SELECT usuario_id FROM usuarios WHERE empresa_id=$1 AND nombre_completo=$2 AND activo=TRUE',
+        [empresaId, usuario]
+      );
+      if (dup.rows.length > 0) { errores.push(`${usuario}: ya existe`); continue; }
+      cajeroCount++;
+      const numeroCaja = `CAJA-${String(cajeroCount).padStart(3, '0')}`;
+      const hash = await bcrypt.hash(String(pin), 10);
+      await pool.query(
+        `INSERT INTO usuarios (empresa_id, nombre_completo, apellidos, rol, pin, numero_caja, telefono, direccion)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [empresaId, usuario, '', 'CAJERO', hash, numeroCaja, '', '']
+      );
+      creados.push(`${usuario} → ${numeroCaja}`);
+    } catch (e: any) { errores.push(`${usuario}: ${e.message}`); }
+  }
+  return res.status(201).json({ creados, errores, total: creados.length });
+});
+
+// ── A partir de aquí todo requiere auth ──
 router.use(authMiddleware);
 
 // GET /api/users
@@ -49,7 +89,6 @@ router.post('/', requireRol('AUDITOR'), async (req: Request, res: Response) => {
     );
     if (dup.rows.length > 0)
       return res.status(409).json({ error: 'Ya existe un usuario con ese nombre en esta empresa' });
-
     if (rol === 'CAJERO' && numeroCaja) {
       const cajaDup = await pool.query(
         'SELECT usuario_id FROM usuarios WHERE empresa_id=$1 AND numero_caja=$2 AND activo=TRUE',
@@ -58,7 +97,6 @@ router.post('/', requireRol('AUDITOR'), async (req: Request, res: Response) => {
       if (cajaDup.rows.length > 0)
         return res.status(409).json({ error: `La ${numeroCaja} ya está asignada a otro cajero` });
     }
-
     const hash = await bcrypt.hash(pin, 10);
     const r = await pool.query(
       `INSERT INTO usuarios
@@ -78,30 +116,23 @@ router.patch('/:id/profile', async (req: Request, res: Response) => {
   const targetId = parseInt(req.params.id);
   if (usuarioId !== targetId && rol !== 'AUDITOR')
     return res.status(403).json({ error: 'Solo puedes editar tu propio perfil' });
-
   const { nombre, apellidos, telefono, direccion, pinActual, pinNuevo } = req.body;
   try {
     if (pinNuevo) {
-      const uRes = await pool.query(
-        'SELECT pin FROM usuarios WHERE usuario_id=$1', [targetId]
-      );
+      const uRes = await pool.query('SELECT pin FROM usuarios WHERE usuario_id=$1', [targetId]);
       if (!uRes.rows[0]) return res.status(404).json({ error: 'Usuario no encontrado' });
       if (!pinActual || !await bcrypt.compare(pinActual, uRes.rows[0].pin))
         return res.status(401).json({ error: 'PIN actual incorrecto' });
     }
-
     const newHash = pinNuevo ? await bcrypt.hash(pinNuevo, 10) : null;
-
     if (newHash) {
       await pool.query(
-        `UPDATE usuarios SET nombre_completo=$1, apellidos=$2, telefono=$3, direccion=$4, pin=$5
-         WHERE usuario_id=$6`,
+        `UPDATE usuarios SET nombre_completo=$1, apellidos=$2, telefono=$3, direccion=$4, pin=$5 WHERE usuario_id=$6`,
         [nombre, apellidos || '', telefono || '', direccion || '', newHash, targetId]
       );
     } else {
       await pool.query(
-        `UPDATE usuarios SET nombre_completo=$1, apellidos=$2, telefono=$3, direccion=$4
-         WHERE usuario_id=$5`,
+        `UPDATE usuarios SET nombre_completo=$1, apellidos=$2, telefono=$3, direccion=$4 WHERE usuario_id=$5`,
         [nombre, apellidos || '', telefono || '', direccion || '', targetId]
       );
     }
@@ -115,7 +146,6 @@ router.patch('/:id/estado', requireRol('AUDITOR'), async (req: Request, res: Res
   const { empresaId } = (req as any).user;
   try {
     if (!activo) {
-      // Al desactivar, liberar el número de caja para que pueda reasignarse
       await pool.query(
         'UPDATE usuarios SET activo=$1, numero_caja=NULL WHERE usuario_id=$2 AND empresa_id=$3',
         [false, parseInt(req.params.id), empresaId]

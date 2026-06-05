@@ -9,11 +9,23 @@ import arqueosRouter from './routes/arqueos';
 import ticketsRouter from './routes/tickets';
 import excelRouter   from './routes/excel';
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '../../.env') })
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true }));
+app.use(cors({
+  origin: (origin, callback) => {
+    const allowed = [
+      'https://arqueo.khipu.plus',
+      'http://arqueo.khipu.plus',
+      'http://localhost:5173',
+      process.env.FRONTEND_URL,
+    ].filter(Boolean);
+    if (!origin || allowed.includes(origin)) return callback(null, true);
+    callback(new Error('CORS no permitido: ' + origin));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -27,7 +39,17 @@ app.get('/api/health', (_req, res) =>
   res.json({ status: 'OK', version: '4.2.0', app: 'KHIPU Arqueo Pro' }));
 
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../frontend/dist')));
+  app.use(express.static(path.join(__dirname, '../frontend/dist'), {
+    etag: false,
+    lastModified: false,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    }
+  }));
   app.get('*', (req, res) => {
     if (req.path.startsWith('/api')) return res.status(404).json({ error: 'Not found' });
     res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
