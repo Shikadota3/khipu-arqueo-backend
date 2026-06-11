@@ -33,9 +33,12 @@ router.post('/', async (req: Request, res: Response) => {
   const { empresaId, usuarioId } = (req as any).user;
   const {
     modo, tipoNegocio, periodo, fechaArqueo, horaInicio, horaFin,
-    saldoApertura, operaciones, denominaciones, posEntries, walletEntries,
-    saldoTeorico, totalFisico, totalPOS, totalDigital, totalReal,
-    diferencia, estadoCaja, explicacionFaltante, tratamientoFaltante,
+    saldoApertura, saldoInicialPos, saldoInicialDigital,
+    operaciones, denominaciones, posEntries, walletEntries,
+    saldoTeorico, teoricoEfectivo, teoricoPos, teoricoDigital,
+    totalFisico, totalPOS, totalDigital, totalReal,
+    diferencia, diferenciaEfectivo, diferenciaPos, diferenciaDigital,
+    estadoCaja, explicacionFaltante, tratamientoFaltante,
   } = req.body;
 
   const client = await pool.connect();
@@ -46,18 +49,21 @@ router.post('/', async (req: Request, res: Response) => {
     const aRes = await client.query(
       `INSERT INTO arqueos
          (empresa_id, usuario_id, modo, tipo_negocio, periodo, fecha_arqueo,
-          hora_inicio, hora_fin, saldo_apertura, saldo_teorico, total_fisico,
-          total_pos, total_digital, total_real, diferencia, estado_caja,
-          explicacion_faltante, tratamiento_faltante)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          hora_inicio, hora_fin, saldo_apertura, saldo_inicial_pos, saldo_inicial_digital,
+          saldo_teorico, teorico_efectivo, teorico_pos, teorico_digital,
+          total_fisico, total_pos, total_digital, total_real,
+          diferencia, diferencia_efectivo, diferencia_pos, diferencia_digital,
+          estado_caja, explicacion_faltante, tratamiento_faltante)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
        RETURNING arqueo_id`,
       [
         empresaId, usuarioId, modo, tipoNegocio, periodo, fechaArqueo,
         horaInicio, horaFin || null,
-        saldoApertura  || 0, saldoTeorico   || 0, totalFisico  || 0,
-        totalPOS       || 0, totalDigital   || 0, totalReal    || 0,
-        diferencia     || 0, estadoCaja,
-        explicacionFaltante || null, tratamientoFaltante || null,
+        saldoApertura       || 0, saldoInicialPos    || 0, saldoInicialDigital || 0,
+        saldoTeorico        || 0, teoricoEfectivo    || 0, teoricoPos          || 0, teoricoDigital    || 0,
+        totalFisico         || 0, totalPOS           || 0, totalDigital        || 0, totalReal         || 0,
+        diferencia          || 0, diferenciaEfectivo || 0, diferenciaPos       || 0, diferenciaDigital || 0,
+        estadoCaja, explicacionFaltante || null, tratamientoFaltante || null,
       ]
     );
     const arqueoId = aRes.rows[0].arqueo_id;
