@@ -28,7 +28,7 @@ router.get('/', async (req: Request, res: Response) => {
   } catch (err: any) { return res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/arqueos — guarda arqueo completo en una transacción
+// POST /api/arqueos
 router.post('/', async (req: Request, res: Response) => {
   const { empresaId, usuarioId } = (req as any).user;
   const {
@@ -45,7 +45,6 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     await client.query('BEGIN');
 
-    // 1. Insertar arqueo principal
     const aRes = await client.query(
       `INSERT INTO arqueos
          (empresa_id, usuario_id, modo, tipo_negocio, periodo, fecha_arqueo,
@@ -60,31 +59,30 @@ router.post('/', async (req: Request, res: Response) => {
       [
         empresaId, usuarioId, modo, tipoNegocio, periodo, fechaArqueo,
         horaInicio, horaFin || null,
-        saldoApertura              || 0,
-        saldoInicialPos            || 0,
-        saldoInicialDigital        || 0,
-        saldoInicialTransferencia  || 0,
-        saldoTeorico               || 0,
-        teoricoEfectivo            || 0,
-        teoricoPos                 || 0,
-        teoricoDigital             || 0,
-        teoricoTransferencia       || 0,
-        totalFisico                || 0,
-        totalPOS                   || 0,
-        totalDigital               || 0,
-        totalTransferencia         || 0,
-        totalReal                  || 0,
-        diferencia                 || 0,
-        diferenciaEfectivo         || 0,
-        diferenciaPos              || 0,
-        diferenciaDigital          || 0,
-        diferenciaTransferencia    || 0,
+        saldoApertura             || 0,
+        saldoInicialPos           || 0,
+        saldoInicialDigital       || 0,
+        saldoInicialTransferencia || 0,
+        saldoTeorico              || 0,
+        teoricoEfectivo           || 0,
+        teoricoPos                || 0,
+        teoricoDigital            || 0,
+        teoricoTransferencia      || 0,
+        totalFisico               || 0,
+        totalPOS                  || 0,
+        totalDigital              || 0,
+        totalTransferencia        || 0,
+        totalReal                 || 0,
+        diferencia                || 0,
+        diferenciaEfectivo        || 0,
+        diferenciaPos             || 0,
+        diferenciaDigital         || 0,
+        diferenciaTransferencia   || 0,
         estadoCaja, explicacionFaltante || null, tratamientoFaltante || null,
       ]
     );
     const arqueoId = aRes.rows[0].arqueo_id;
 
-    // 2. Operaciones
     for (const op of (operaciones || [])) {
       await client.query(
         `INSERT INTO operaciones
@@ -99,7 +97,6 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 3. Denominaciones
     for (const d of (denominaciones || [])) {
       if (d.cantidad > 0) {
         await client.query(
@@ -110,7 +107,6 @@ router.post('/', async (req: Request, res: Response) => {
       }
     }
 
-    // 4. Entradas POS
     for (const p of (posEntries || [])) {
       await client.query(
         `INSERT INTO entradas_pos (arqueo_id, monto, numero_lote) VALUES ($1,$2,$3)`,
@@ -118,7 +114,6 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 5. Entradas Digitales (Yape/Plin)
     for (const w of (walletEntries || [])) {
       await client.query(
         `INSERT INTO entradas_digitales (arqueo_id, monto, numero_operacion) VALUES ($1,$2,$3)`,
@@ -126,7 +121,6 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 6. Entradas Transferencia
     for (const t of (transferEntries || [])) {
       await client.query(
         `INSERT INTO entradas_transferencia (arqueo_id, monto, numero_operacion) VALUES ($1,$2,$3)`,
@@ -144,7 +138,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-// PATCH /api/arqueos/:id/aprobar — solo Auditor
+// PATCH /api/arqueos/:id/aprobar
 router.patch('/:id/aprobar', requireRol('AUDITOR'), async (req: Request, res: Response) => {
   const { usuarioId, empresaId } = (req as any).user;
   const { estado, observacion } = req.body;
@@ -165,7 +159,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   const { empresaId } = (req as any).user;
   const id = parseInt(req.params.id);
   try {
-    const [a, ops, dens, pos, wal] = await Promise.all([
+    const [a, ops, dens, pos, wal, trans] = await Promise.all([
       pool.query(
         `SELECT a.*, u.nombre_completo AS auditor, u.numero_caja
          FROM arqueos a JOIN usuarios u ON a.usuario_id = u.usuario_id
@@ -176,16 +170,16 @@ router.get('/:id', async (req: Request, res: Response) => {
       pool.query('SELECT * FROM detalle_denominaciones WHERE arqueo_id=$1', [id]),
       pool.query('SELECT * FROM entradas_pos WHERE arqueo_id=$1', [id]),
       pool.query('SELECT * FROM entradas_digitales WHERE arqueo_id=$1', [id]),
+      pool.query('SELECT * FROM entradas_transferencia WHERE arqueo_id=$1', [id]),
     ]);
-
     if (!a.rows[0]) return res.status(404).json({ error: 'No encontrado' });
-
     return res.json({
       ...a.rows[0],
-      operaciones:   ops.rows,
-      denominaciones: dens.rows,
-      posEntries:    pos.rows,
-      walletEntries: wal.rows,
+      operaciones:     ops.rows,
+      denominaciones:  dens.rows,
+      posEntries:      pos.rows,
+      walletEntries:   wal.rows,
+      transferEntries: trans.rows,
     });
   } catch (err: any) { return res.status(500).json({ error: err.message }); }
 });
