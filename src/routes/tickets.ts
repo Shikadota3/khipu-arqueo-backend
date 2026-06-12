@@ -26,12 +26,16 @@ router.get('/', async (req: Request, res: Response) => {
 // POST /api/tickets
 router.post('/', async (req: Request, res: Response) => {
   const { usuarioId, empresaId } = (req as any).user;
-  const { arqueoId, saldoCierre, saldoSiguienteTurno, observaciones, aprobadoPor } = req.body;
+  const {
+    arqueoId, saldoCierre, observaciones, aprobadoPor,
+    montoLlevadoEfectivo, montoLlevadoPos, montoLlevadoDigital, montoLlevadoTransferencia,
+    cierreEfectivo, cierrePos, cierreDigital, cierreTransferencia,
+  } = req.body;
+
   if (!arqueoId || saldoCierre === undefined)
     return res.status(400).json({ error: 'ArqueoId y SaldoCierre son obligatorios' });
 
   try {
-    // Verificar que el arqueo pertenece a esta empresa
     const chk = await pool.query(
       'SELECT arqueo_id FROM arqueos WHERE arqueo_id=$1 AND empresa_id=$2',
       [arqueoId, empresaId]
@@ -39,26 +43,44 @@ router.post('/', async (req: Request, res: Response) => {
     if (!chk.rows[0])
       return res.status(403).json({ error: 'Arqueo no pertenece a esta empresa' });
 
+    // Totales cierre por canal
+    const ef  = parseFloat(cierreEfectivo)       || 0;
+    const pos = parseFloat(cierrePos)            || 0;
+    const dig = parseFloat(cierreDigital)        || 0;
+    const tra = parseFloat(cierreTransferencia)  || 0;
+
+    // Lo que se lleva el dueño por canal
+    const lEf  = parseFloat(montoLlevadoEfectivo)       || 0;
+    const lPos = parseFloat(montoLlevadoPos)            || 0;
+    const lDig = parseFloat(montoLlevadoDigital)        || 0;
+    const lTra = parseFloat(montoLlevadoTransferencia)  || 0;
+
+    // Saldo siguiente turno por canal
+    const sigEf  = Math.max(0, ef  - lEf);
+    const sigPos = Math.max(0, pos - lPos);
+    const sigDig = Math.max(0, dig - lDig);
+    const sigTra = Math.max(0, tra - lTra);
+    const sigTotal       = sigEf + sigPos + sigDig + sigTra;
+    const montoLlevadoTotal = lEf + lPos + lDig + lTra;
+
     const estado = observaciones ? 'OBSERVADO' : 'PENDIENTE';
 
     const r = await pool.query(
       `INSERT INTO tickets_cierre
-         (arqueo_id, usuario_id, saldo_cierre, saldo_siguiente_turno, observaciones, aprobado_por, estado)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+         (arqueo_id, usuario_id, saldo_cierre, saldo_siguiente_turno, observaciones, aprobado_por, estado,
+          monto_llevado, monto_llevado_efectivo, monto_llevado_pos, monto_llevado_digital, monto_llevado_transferencia,
+          saldo_siguiente_efectivo, saldo_siguiente_pos, saldo_siguiente_digital, saldo_siguiente_transferencia)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING ticket_id`,
       [
-        arqueoId, usuarioId, parseFloat(saldoCierre),
-        parseFloat(saldoSiguienteTurno) || 0,
+        arqueoId, usuarioId, parseFloat(saldoCierre), sigTotal,
         observaciones || null, aprobadoPor || null, estado,
+        montoLlevadoTotal, lEf, lPos, lDig, lTra,
+        sigEf, sigPos, sigDig, sigTra,
       ]
     );
 
-    // Marcar fecha de cierre del arqueo
-    await pool.query(
-      'UPDATE arqueos SET fecha_cierre=NOW() WHERE arqueo_id=$1',
-      [arqueoId]
-    );
-
+    await pool.query('UPDATE arqueos SET fecha_cierre=NOW() WHERE arqueo_id=$1', [arqueoId]);
     return res.status(201).json({ ticketId: r.rows[0].ticket_id, estado });
   } catch (err: any) { return res.status(500).json({ error: err.message }); }
 });
