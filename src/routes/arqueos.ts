@@ -158,21 +158,22 @@ router.patch('/:id/aprobar', requireRol('AUDITOR'), async (req: Request, res: Re
 router.get('/:id', async (req: Request, res: Response) => {
   const { empresaId } = (req as any).user;
   const id = parseInt(req.params.id);
+  const client = await pool.connect();
   try {
-    const [a, ops, dens, pos, wal, trans] = await Promise.all([
-      pool.query(
-        `SELECT a.*, u.nombre_completo AS auditor, u.numero_caja
-         FROM arqueos a JOIN usuarios u ON a.usuario_id = u.usuario_id
-         WHERE a.arqueo_id=$1 AND a.empresa_id=$2`,
-        [id, empresaId]
-      ),
-      pool.query('SELECT * FROM operaciones WHERE arqueo_id=$1 ORDER BY fecha_operacion', [id]),
-      pool.query('SELECT * FROM detalle_denominaciones WHERE arqueo_id=$1', [id]),
-      pool.query('SELECT * FROM entradas_pos WHERE arqueo_id=$1', [id]),
-      pool.query('SELECT * FROM entradas_digitales WHERE arqueo_id=$1', [id]),
-      pool.query('SELECT * FROM entradas_transferencia WHERE arqueo_id=$1', [id]),
-    ]);
+    const a = await client.query(
+      `SELECT a.*, u.nombre_completo AS auditor, u.numero_caja
+       FROM arqueos a JOIN usuarios u ON a.usuario_id = u.usuario_id
+       WHERE a.arqueo_id=$1 AND a.empresa_id=$2`,
+      [id, empresaId]
+    );
     if (!a.rows[0]) return res.status(404).json({ error: 'No encontrado' });
+
+    const ops   = await client.query('SELECT * FROM operaciones WHERE arqueo_id=$1 ORDER BY fecha_operacion', [id]);
+    const dens  = await client.query('SELECT * FROM detalle_denominaciones WHERE arqueo_id=$1', [id]);
+    const pos   = await client.query('SELECT * FROM entradas_pos WHERE arqueo_id=$1', [id]);
+    const wal   = await client.query('SELECT * FROM entradas_digitales WHERE arqueo_id=$1', [id]);
+    const trans = await client.query('SELECT * FROM entradas_transferencia WHERE arqueo_id=$1', [id]);
+
     return res.json({
       ...a.rows[0],
       operaciones:     ops.rows,
@@ -181,7 +182,11 @@ router.get('/:id', async (req: Request, res: Response) => {
       walletEntries:   wal.rows,
       transferEntries: trans.rows,
     });
-  } catch (err: any) { return res.status(500).json({ error: err.message }); }
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
 export default router;

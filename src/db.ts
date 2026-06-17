@@ -6,6 +6,10 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: false,
+  max: 30,                        // valor provisional, lo ajustamos según el dato de abajo
+  min: 3,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 8000,
 });
 
 pool.on('connect', () => {
