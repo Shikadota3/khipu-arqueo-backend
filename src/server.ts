@@ -9,7 +9,7 @@ import arqueosRouter from './routes/arqueos';
 import ticketsRouter from './routes/tickets';
 import excelRouter   from './routes/excel';
 
-dotenv.config({ path: path.join(__dirname, '../../.env') })
+dotenv.config({ path: path.join(__dirname, '../.env') })
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
