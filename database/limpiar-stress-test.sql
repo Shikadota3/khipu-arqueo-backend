@@ -1,7 +1,7 @@
 BEGIN;
 DO $$
 DECLARE
-  v_ruc       TEXT := '99999999353';
+  v_ruc       TEXT := '99999999851';
   v_empresa_id INT;
 BEGIN
   SELECT empresa_id INTO v_empresa_id FROM empresas WHERE ruc = v_ruc;
