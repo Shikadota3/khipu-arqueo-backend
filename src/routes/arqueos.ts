@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
 import pool from '../db';
 import { authMiddleware, requireRol } from '../middleware/auth';
 
@@ -183,6 +184,48 @@ router.get('/:id', async (req: Request, res: Response) => {
       transferEntries: trans.rows,
     });
   } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// DELETE /api/arqueos/:id — solo Auditor, requiere su propio PIN
+router.delete('/:id', requireRol('AUDITOR'), async (req: Request, res: Response) => {
+  const { empresaId, usuarioId } = (req as any).user;
+  const { pin } = req.body;
+  const id = parseInt(req.params.id);
+
+  if (!pin) return res.status(400).json({ error: 'PIN requerido para eliminar' });
+
+  const client = await pool.connect();
+  try {
+    // 1. Verificar que el arqueo pertenece a la empresa del auditor
+    const chk = await client.query(
+      'SELECT arqueo_id FROM arqueos WHERE arqueo_id=$1 AND empresa_id=$2',
+      [id, empresaId]
+    );
+    if (!chk.rows[0]) return res.status(404).json({ error: 'Expediente no encontrado' });
+
+    // 2. Verificar el PIN del auditor que está pidiendo el borrado
+    const uRes = await client.query('SELECT pin FROM usuarios WHERE usuario_id=$1', [usuarioId]);
+    if (!uRes.rows[0] || !await bcrypt.compare(String(pin), uRes.rows[0].pin))
+      return res.status(401).json({ error: 'PIN incorrecto' });
+
+    // 3. Borrar en cascada (no hay ON DELETE CASCADE en el esquema actual)
+    await client.query('BEGIN');
+    await client.query('DELETE FROM tickets_cierre WHERE arqueo_id=$1', [id]);
+    await client.query('DELETE FROM operaciones WHERE arqueo_id=$1', [id]);
+    await client.query('DELETE FROM detalle_denominaciones WHERE arqueo_id=$1', [id]);
+    await client.query('DELETE FROM entradas_pos WHERE arqueo_id=$1', [id]);
+    await client.query('DELETE FROM entradas_digitales WHERE arqueo_id=$1', [id]);
+    await client.query('DELETE FROM entradas_transferencia WHERE arqueo_id=$1', [id]);
+    await client.query('DELETE FROM arqueos WHERE arqueo_id=$1 AND empresa_id=$2', [id, empresaId]);
+    await client.query('COMMIT');
+
+    return res.json({ message: 'Expediente eliminado' });
+  } catch (err: any) {
+    await client.query('ROLLBACK');
     return res.status(500).json({ error: err.message });
   } finally {
     client.release();
