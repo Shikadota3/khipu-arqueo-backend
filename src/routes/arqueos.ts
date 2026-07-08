@@ -34,10 +34,10 @@ router.post('/', async (req: Request, res: Response) => {
   const { empresaId, usuarioId } = (req as any).user;
   const {
     modo, tipoNegocio, periodo, fechaArqueo, horaInicio, horaFin,
-    saldoApertura, saldoInicialPos, saldoInicialDigital, saldoInicialTransferencia,
+    saldoApertura, saldoInicialPos, saldoInicialDigital, saldoInicialTransferencia, saldoInicialCredito,
     operaciones, denominaciones, posEntries, walletEntries, transferEntries,
-    saldoTeorico, teoricoEfectivo, teoricoPos, teoricoDigital, teoricoTransferencia,
-    totalFisico, totalPOS, totalDigital, totalTransferencia, totalReal,
+    saldoTeorico, teoricoEfectivo, teoricoPos, teoricoDigital, teoricoTransferencia, teoricoCredito,
+    totalFisico, totalPOS, totalDigital, totalTransferencia, totalCredito, totalReal,
     diferencia, diferenciaEfectivo, diferenciaPos, diferenciaDigital, diferenciaTransferencia,
     estadoCaja, explicacionFaltante, tratamientoFaltante,
   } = req.body;
@@ -50,12 +50,12 @@ router.post('/', async (req: Request, res: Response) => {
       `INSERT INTO arqueos
          (empresa_id, usuario_id, modo, tipo_negocio, periodo, fecha_arqueo,
           hora_inicio, hora_fin,
-          saldo_apertura, saldo_inicial_pos, saldo_inicial_digital, saldo_inicial_transferencia,
-          saldo_teorico, teorico_efectivo, teorico_pos, teorico_digital, teorico_transferencia,
-          total_fisico, total_pos, total_digital, total_transferencia, total_real,
+          saldo_apertura, saldo_inicial_pos, saldo_inicial_digital, saldo_inicial_transferencia, saldo_inicial_credito,
+          saldo_teorico, teorico_efectivo, teorico_pos, teorico_digital, teorico_transferencia, teorico_credito,
+          total_fisico, total_pos, total_digital, total_transferencia, total_credito, total_real,
           diferencia, diferencia_efectivo, diferencia_pos, diferencia_digital, diferencia_transferencia,
           estado_caja, explicacion_faltante, tratamiento_faltante)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
        RETURNING arqueo_id`,
       [
         empresaId, usuarioId, modo, tipoNegocio, periodo, fechaArqueo,
@@ -64,15 +64,18 @@ router.post('/', async (req: Request, res: Response) => {
         saldoInicialPos           || 0,
         saldoInicialDigital       || 0,
         saldoInicialTransferencia || 0,
+        saldoInicialCredito       || 0,
         saldoTeorico              || 0,
         teoricoEfectivo           || 0,
         teoricoPos                || 0,
         teoricoDigital            || 0,
         teoricoTransferencia      || 0,
+        teoricoCredito            || 0,
         totalFisico               || 0,
         totalPOS                  || 0,
-        totalDigital              || 0,
+        totalDigital               || 0,
         totalTransferencia        || 0,
+        totalCredito              || 0,
         totalReal                 || 0,
         diferencia                || 0,
         diferenciaEfectivo        || 0,
