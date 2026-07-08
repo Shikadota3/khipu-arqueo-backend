@@ -2,9 +2,24 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import pool from '../db';
 import { authMiddleware, requireRol } from '../middleware/auth';
-
+import { PoolClient } from 'pg'; 
 const router = Router();
 
+async function getNextCajaNumber(client: PoolClient, empresaId: number): Promise<string> {
+  const r = await client.query(
+    `SELECT numero_caja FROM usuarios
+     WHERE empresa_id=$1 AND rol='CAJERO' AND activo=TRUE AND numero_caja IS NOT NULL`,
+    [empresaId]
+  );
+  const usados = new Set(
+    r.rows
+      .map((row: any) => parseInt(String(row.numero_caja).replace('CAJA-', ''), 10))
+      .filter((n: number) => !isNaN(n))
+  );
+  let n = 1;
+  while (usados.has(n)) n++;
+  return `CAJA-${String(n).padStart(3, '0')}`;
+}
 // GET /api/users/public/:empresaId — sin auth
 router.get('/public/:empresaId', async (req: Request, res: Response) => {
   try {
@@ -26,33 +41,39 @@ router.post('/bulk', authMiddleware, requireRol('AUDITOR'), async (req: Request,
     return res.status(400).json({ error: 'No se recibieron usuarios' });
   const creados: string[] = [];
   const errores: string[] = [];
-  const cajRes = await pool.query(
-    `SELECT COUNT(*) FROM usuarios WHERE empresa_id=$1 AND rol='CAJERO' AND activo=TRUE`,
-    [empresaId]
-  );
-  let cajeroCount = parseInt(cajRes.rows[0].count) || 0;
-  for (const u of usuarios) {
-    const { usuario, pin } = u;
-    if (!usuario || !pin || String(pin).length < 4) {
-      errores.push(`${usuario || 'sin nombre'}: datos inválidos`);
-      continue;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [empresaId]);
+
+    for (const u of usuarios) {
+      const { usuario, pin } = u;
+      if (!usuario || !pin || String(pin).length < 4) {
+        errores.push(`${usuario || 'sin nombre'}: datos inválidos`);
+        continue;
+      }
+      try {
+        const dup = await client.query(
+          'SELECT usuario_id FROM usuarios WHERE empresa_id=$1 AND nombre_completo=$2 AND activo=TRUE',
+          [empresaId, usuario]
+        );
+        if (dup.rows.length > 0) { errores.push(`${usuario}: ya existe`); continue; }
+        const numeroCaja = await getNextCajaNumber(client, empresaId);
+        const hash = await bcrypt.hash(String(pin), 10);
+        await client.query(
+          `INSERT INTO usuarios (empresa_id, nombre_completo, apellidos, rol, pin, numero_caja, telefono, direccion)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [empresaId, usuario, '', 'CAJERO', hash, numeroCaja, '', '']
+        );
+        creados.push(`${usuario} → ${numeroCaja}`);
+      } catch (e: any) { errores.push(`${usuario}: ${e.message}`); }
     }
-    try {
-      const dup = await pool.query(
-        'SELECT usuario_id FROM usuarios WHERE empresa_id=$1 AND nombre_completo=$2 AND activo=TRUE',
-        [empresaId, usuario]
-      );
-      if (dup.rows.length > 0) { errores.push(`${usuario}: ya existe`); continue; }
-      cajeroCount++;
-      const numeroCaja = `CAJA-${String(cajeroCount).padStart(3, '0')}`;
-      const hash = await bcrypt.hash(String(pin), 10);
-      await pool.query(
-        `INSERT INTO usuarios (empresa_id, nombre_completo, apellidos, rol, pin, numero_caja, telefono, direccion)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [empresaId, usuario, '', 'CAJERO', hash, numeroCaja, '', '']
-      );
-      creados.push(`${usuario} → ${numeroCaja}`);
-    } catch (e: any) { errores.push(`${usuario}: ${e.message}`); }
+    await client.query('COMMIT');
+  } catch (e: any) {
+    await client.query('ROLLBACK');
+    return res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
   return res.status(201).json({ creados, errores, total: creados.length });
 });
@@ -77,37 +98,47 @@ router.get('/', async (req: Request, res: Response) => {
 // POST /api/users — solo Auditor
 router.post('/', requireRol('AUDITOR'), async (req: Request, res: Response) => {
   const { empresaId, usuarioId } = (req as any).user;
-  const { nombreCompleto, apellidos, rol, pin, telefono, direccion, numeroCaja } = req.body;
+  const { nombreCompleto, apellidos, rol, pin, telefono, direccion } = req.body;
   if (!nombreCompleto || !pin)
     return res.status(400).json({ error: 'Nombre y PIN son obligatorios' });
   if (!['CAJERO','AUDITOR'].includes(rol))
     return res.status(400).json({ error: 'Rol inválido' });
+
+  const client = await pool.connect();
   try {
-    const dup = await pool.query(
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1)', [empresaId]);
+
+    const dup = await client.query(
       'SELECT usuario_id FROM usuarios WHERE empresa_id=$1 AND nombre_completo=$2 AND activo=TRUE',
       [empresaId, nombreCompleto]
     );
-    if (dup.rows.length > 0)
+    if (dup.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(409).json({ error: 'Ya existe un usuario con ese nombre en esta empresa' });
-    if (rol === 'CAJERO' && numeroCaja) {
-      const cajaDup = await pool.query(
-        'SELECT usuario_id FROM usuarios WHERE empresa_id=$1 AND numero_caja=$2 AND activo=TRUE',
-        [empresaId, numeroCaja]
-      );
-      if (cajaDup.rows.length > 0)
-        return res.status(409).json({ error: `La ${numeroCaja} ya está asignada a otro cajero` });
     }
+
+    const numeroCaja = rol === 'CAJERO' ? await getNextCajaNumber(client, empresaId) : null;
+
     const hash = await bcrypt.hash(pin, 10);
-    const r = await pool.query(
+    const r = await client.query(
       `INSERT INTO usuarios
          (empresa_id, nombre_completo, apellidos, rol, pin, numero_caja, telefono, direccion, creado_por)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING usuario_id, nombre_completo, rol, numero_caja`,
       [empresaId, nombreCompleto, apellidos || '', rol, hash,
-       numeroCaja || null, telefono || '', direccion || '', usuarioId]
+       numeroCaja, telefono || '', direccion || '', usuarioId]
     );
+    await client.query('COMMIT');
     return res.status(201).json(r.rows[0]);
-  } catch (err: any) { return res.status(500).json({ error: err.message }); }
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505')
+      return res.status(409).json({ error: 'Ese número de caja acaba de ser tomado, intenta de nuevo' });
+    return res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
 // PATCH /api/users/:id/profile
