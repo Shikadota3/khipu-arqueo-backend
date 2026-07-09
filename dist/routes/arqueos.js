@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const db_1 = __importDefault(require("../db"));
 const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
@@ -31,30 +32,50 @@ router.get('/', async (req, res) => {
         return res.status(500).json({ error: err.message });
     }
 });
-// POST /api/arqueos — guarda arqueo completo en una transacción
+// POST /api/arqueos
 router.post('/', async (req, res) => {
     const { empresaId, usuarioId } = req.user;
-    const { modo, tipoNegocio, periodo, fechaArqueo, horaInicio, horaFin, saldoApertura, operaciones, denominaciones, posEntries, walletEntries, saldoTeorico, totalFisico, totalPOS, totalDigital, totalReal, diferencia, estadoCaja, explicacionFaltante, tratamientoFaltante, } = req.body;
+    const { modo, tipoNegocio, periodo, fechaArqueo, horaInicio, horaFin, saldoApertura, saldoInicialPos, saldoInicialDigital, saldoInicialTransferencia, saldoInicialCredito, operaciones, denominaciones, posEntries, walletEntries, transferEntries, saldoTeorico, teoricoEfectivo, teoricoPos, teoricoDigital, teoricoTransferencia, teoricoCredito, totalFisico, totalPOS, totalDigital, totalTransferencia, totalCredito, totalReal, diferencia, diferenciaEfectivo, diferenciaPos, diferenciaDigital, diferenciaTransferencia, estadoCaja, explicacionFaltante, tratamientoFaltante, } = req.body;
     const client = await db_1.default.connect();
     try {
         await client.query('BEGIN');
-        // 1. Insertar arqueo principal
         const aRes = await client.query(`INSERT INTO arqueos
          (empresa_id, usuario_id, modo, tipo_negocio, periodo, fecha_arqueo,
-          hora_inicio, hora_fin, saldo_apertura, saldo_teorico, total_fisico,
-          total_pos, total_digital, total_real, diferencia, estado_caja,
-          explicacion_faltante, tratamiento_faltante)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          hora_inicio, hora_fin,
+          saldo_apertura, saldo_inicial_pos, saldo_inicial_digital, saldo_inicial_transferencia, saldo_inicial_credito,
+          saldo_teorico, teorico_efectivo, teorico_pos, teorico_digital, teorico_transferencia, teorico_credito,
+          total_fisico, total_pos, total_digital, total_transferencia, total_credito, total_real,
+          diferencia, diferencia_efectivo, diferencia_pos, diferencia_digital, diferencia_transferencia,
+          estado_caja, explicacion_faltante, tratamiento_faltante)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
        RETURNING arqueo_id`, [
             empresaId, usuarioId, modo, tipoNegocio, periodo, fechaArqueo,
             horaInicio, horaFin || null,
-            saldoApertura || 0, saldoTeorico || 0, totalFisico || 0,
-            totalPOS || 0, totalDigital || 0, totalReal || 0,
-            diferencia || 0, estadoCaja,
-            explicacionFaltante || null, tratamientoFaltante || null,
+            saldoApertura || 0,
+            saldoInicialPos || 0,
+            saldoInicialDigital || 0,
+            saldoInicialTransferencia || 0,
+            saldoInicialCredito || 0,
+            saldoTeorico || 0,
+            teoricoEfectivo || 0,
+            teoricoPos || 0,
+            teoricoDigital || 0,
+            teoricoTransferencia || 0,
+            teoricoCredito || 0,
+            totalFisico || 0,
+            totalPOS || 0,
+            totalDigital || 0,
+            totalTransferencia || 0,
+            totalCredito || 0,
+            totalReal || 0,
+            diferencia || 0,
+            diferenciaEfectivo || 0,
+            diferenciaPos || 0,
+            diferenciaDigital || 0,
+            diferenciaTransferencia || 0,
+            estadoCaja, explicacionFaltante || null, tratamientoFaltante || null,
         ]);
         const arqueoId = aRes.rows[0].arqueo_id;
-        // 2. Operaciones
         for (const op of (operaciones || [])) {
             await client.query(`INSERT INTO operaciones
            (arqueo_id, usuario_id, concepto, monto, tipo_movimiento,
@@ -65,20 +86,20 @@ router.post('/', async (req, res) => {
                 op.tieneDoc || false, op.imagenBase64 || null, op.origen || 'MANUAL',
             ]);
         }
-        // 3. Denominaciones
         for (const d of (denominaciones || [])) {
             if (d.cantidad > 0) {
                 await client.query(`INSERT INTO detalle_denominaciones (arqueo_id, denominacion, tipo_denominacion, cantidad)
            VALUES ($1,$2,$3,$4)`, [arqueoId, d.valor, d.tipo, d.cantidad]);
             }
         }
-        // 4. Entradas POS
         for (const p of (posEntries || [])) {
             await client.query(`INSERT INTO entradas_pos (arqueo_id, monto, numero_lote) VALUES ($1,$2,$3)`, [arqueoId, p.monto, p.numeroLote || null]);
         }
-        // 5. Entradas Digitales (Yape/Plin)
         for (const w of (walletEntries || [])) {
             await client.query(`INSERT INTO entradas_digitales (arqueo_id, monto, numero_operacion) VALUES ($1,$2,$3)`, [arqueoId, w.monto, w.numeroOp || null]);
+        }
+        for (const t of (transferEntries || [])) {
+            await client.query(`INSERT INTO entradas_transferencia (arqueo_id, monto, numero_operacion) VALUES ($1,$2,$3)`, [arqueoId, t.monto, t.numeroOp || null]);
         }
         await client.query('COMMIT');
         return res.status(201).json({ arqueoId, message: 'Arqueo guardado' });
@@ -91,7 +112,7 @@ router.post('/', async (req, res) => {
         client.release();
     }
 });
-// PATCH /api/arqueos/:id/aprobar — solo Auditor
+// PATCH /api/arqueos/:id/aprobar
 router.patch('/:id/aprobar', (0, auth_1.requireRol)('AUDITOR'), async (req, res) => {
     const { usuarioId, empresaId } = req.user;
     const { estado, observacion } = req.body;
@@ -110,28 +131,69 @@ router.patch('/:id/aprobar', (0, auth_1.requireRol)('AUDITOR'), async (req, res)
 router.get('/:id', async (req, res) => {
     const { empresaId } = req.user;
     const id = parseInt(req.params.id);
+    const client = await db_1.default.connect();
     try {
-        const [a, ops, dens, pos, wal] = await Promise.all([
-            db_1.default.query(`SELECT a.*, u.nombre_completo AS auditor, u.numero_caja
-         FROM arqueos a JOIN usuarios u ON a.usuario_id = u.usuario_id
-         WHERE a.arqueo_id=$1 AND a.empresa_id=$2`, [id, empresaId]),
-            db_1.default.query('SELECT * FROM operaciones WHERE arqueo_id=$1 ORDER BY fecha_operacion', [id]),
-            db_1.default.query('SELECT * FROM detalle_denominaciones WHERE arqueo_id=$1', [id]),
-            db_1.default.query('SELECT * FROM entradas_pos WHERE arqueo_id=$1', [id]),
-            db_1.default.query('SELECT * FROM entradas_digitales WHERE arqueo_id=$1', [id]),
-        ]);
+        const a = await client.query(`SELECT a.*, u.nombre_completo AS auditor, u.numero_caja
+       FROM arqueos a JOIN usuarios u ON a.usuario_id = u.usuario_id
+       WHERE a.arqueo_id=$1 AND a.empresa_id=$2`, [id, empresaId]);
         if (!a.rows[0])
             return res.status(404).json({ error: 'No encontrado' });
+        const ops = await client.query('SELECT * FROM operaciones WHERE arqueo_id=$1 ORDER BY fecha_operacion', [id]);
+        const dens = await client.query('SELECT * FROM detalle_denominaciones WHERE arqueo_id=$1', [id]);
+        const pos = await client.query('SELECT * FROM entradas_pos WHERE arqueo_id=$1', [id]);
+        const wal = await client.query('SELECT * FROM entradas_digitales WHERE arqueo_id=$1', [id]);
+        const trans = await client.query('SELECT * FROM entradas_transferencia WHERE arqueo_id=$1', [id]);
         return res.json({
             ...a.rows[0],
             operaciones: ops.rows,
             denominaciones: dens.rows,
             posEntries: pos.rows,
             walletEntries: wal.rows,
+            transferEntries: trans.rows,
         });
     }
     catch (err) {
         return res.status(500).json({ error: err.message });
+    }
+    finally {
+        client.release();
+    }
+});
+// DELETE /api/arqueos/:id — solo Auditor, requiere su propio PIN
+router.delete('/:id', (0, auth_1.requireRol)('AUDITOR'), async (req, res) => {
+    const { empresaId, usuarioId } = req.user;
+    const { pin } = req.body;
+    const id = parseInt(req.params.id);
+    if (!pin)
+        return res.status(400).json({ error: 'PIN requerido para eliminar' });
+    const client = await db_1.default.connect();
+    try {
+        // 1. Verificar que el arqueo pertenece a la empresa del auditor
+        const chk = await client.query('SELECT arqueo_id FROM arqueos WHERE arqueo_id=$1 AND empresa_id=$2', [id, empresaId]);
+        if (!chk.rows[0])
+            return res.status(404).json({ error: 'Expediente no encontrado' });
+        // 2. Verificar el PIN del auditor que está pidiendo el borrado
+        const uRes = await client.query('SELECT pin FROM usuarios WHERE usuario_id=$1', [usuarioId]);
+        if (!uRes.rows[0] || !await bcryptjs_1.default.compare(String(pin), uRes.rows[0].pin))
+            return res.status(401).json({ error: 'PIN incorrecto' });
+        // 3. Borrar en cascada (no hay ON DELETE CASCADE en el esquema actual)
+        await client.query('BEGIN');
+        await client.query('DELETE FROM tickets_cierre WHERE arqueo_id=$1', [id]);
+        await client.query('DELETE FROM operaciones WHERE arqueo_id=$1', [id]);
+        await client.query('DELETE FROM detalle_denominaciones WHERE arqueo_id=$1', [id]);
+        await client.query('DELETE FROM entradas_pos WHERE arqueo_id=$1', [id]);
+        await client.query('DELETE FROM entradas_digitales WHERE arqueo_id=$1', [id]);
+        await client.query('DELETE FROM entradas_transferencia WHERE arqueo_id=$1', [id]);
+        await client.query('DELETE FROM arqueos WHERE arqueo_id=$1 AND empresa_id=$2', [id, empresaId]);
+        await client.query('COMMIT');
+        return res.json({ message: 'Expediente eliminado' });
+    }
+    catch (err) {
+        await client.query('ROLLBACK');
+        return res.status(500).json({ error: err.message });
+    }
+    finally {
+        client.release();
     }
 });
 exports.default = router;
